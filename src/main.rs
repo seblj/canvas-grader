@@ -1,6 +1,7 @@
 use crate::download::download_file;
 use crate::models::assignment::Assignment;
 use crate::models::course::{Course, EnrollmentRole};
+use clap::Parser;
 use futures::future::join_all;
 use models::assignment::Attachment;
 use parse_link_header::parse;
@@ -11,21 +12,31 @@ mod models;
 
 const BASE_URL: &str = "https://uit.instructure.com/api/v1/";
 
-async fn get(url: &str) -> Result<Response, anyhow::Error> {
-    let token = dotenv::var("TOKEN")
-        .expect("Couldn't find canvas token")
-        .trim_start_matches("Bearer ")
-        .to_owned();
+#[derive(Parser, Debug)]
+#[clap(author, version, about)]
+struct Args {
+    #[clap(short, long, env = "TOKEN")]
+    token: String,
 
+    #[clap(short, long, env = "COURSE")]
+    course: i32,
+
+    #[clap(short, long, value_parser, env = "ASSIGNMENT")]
+    assignment: i32,
+}
+
+async fn get(url: &str) -> Result<Response, anyhow::Error> {
     Ok(reqwest::Client::new()
         .get(format!("{BASE_URL}/{url}"))
-        .bearer_auth(token)
+        .bearer_auth(Args::parse().token.trim_start_matches("Bearer "))
         .send()
         .await?)
 }
 
-async fn get_assignments_for_section(section: &i32) -> Result<Vec<Assignment>, anyhow::Error> {
-    let assignment = dotenv::var("ASSIGNMENT").expect("Couldn't find id for assignment");
+async fn get_assignments_for_section(
+    section: &i32,
+    assignment: &i32,
+) -> Result<Vec<Assignment>, anyhow::Error> {
     let mut url = format!(
         "sections/{section}/assignments/{assignment}/submissions?per_page=100&include=user"
     );
@@ -62,11 +73,12 @@ async fn get_assignments_for_section(section: &i32) -> Result<Vec<Assignment>, a
 }
 
 async fn get_assignments(section_ids: &[i32]) -> Result<Vec<Assignment>, anyhow::Error> {
-    Ok(join_all(
-        section_ids.iter().map(|section_id| async move {
-            get_assignments_for_section(&section_id).await.unwrap()
-        }),
-    )
+    let assignment = Args::parse().assignment;
+    Ok(join_all(section_ids.iter().map(|section_id| async move {
+        get_assignments_for_section(&section_id, &assignment)
+            .await
+            .unwrap()
+    }))
     .await
     .into_iter()
     .flatten()
@@ -116,14 +128,10 @@ async fn get_section_ids() -> Result<Vec<i32>, anyhow::Error> {
     let res = get(url).await?;
 
     let body = res.json::<Vec<Course>>().await?;
+    let course = Args::parse().course;
     let course = body
         .iter()
-        .find(|x| {
-            x.id == dotenv::var("COURSE")
-                .expect("Couldn't find id for course")
-                .parse::<i32>()
-                .expect("Course id is not a number")
-        })
+        .find(|x| x.id == course)
         .expect("Couldn't find course");
     Ok(course
         .sections
