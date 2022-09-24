@@ -3,10 +3,15 @@ use serde_json::Value;
 
 #[derive(Deserialize, Debug, PartialEq)]
 pub enum EnrollmentRole {
+    #[serde(rename = "StudentEnrollment")]
     Student,
+    #[serde(rename = "TeacherEnrollment")]
     Teacher,
+    #[serde(rename = "TaEnrollment")]
     TA,
+    #[serde(rename = "DesignerEnrollment")]
     Designer,
+    #[serde(rename = "ObserverEnrollment")]
     Observer,
 }
 
