@@ -1,6 +1,8 @@
 use crate::download::download_file;
 use crate::models::assignment::Assignment;
 use crate::models::course::{Course, EnrollmentRole};
+use futures::future::join_all;
+use models::assignment::Attachment;
 use parse_link_header::parse;
 use reqwest::Response;
 
@@ -59,9 +61,8 @@ async fn get_assignments_for_section(section: &i32) -> Result<Vec<Assignment>, a
     Ok(assignments)
 }
 
-// Wow! Concurrently & Unreadalbe!
 async fn get_assignments(section_ids: &[i32]) -> Result<Vec<Assignment>, anyhow::Error> {
-    Ok(futures::future::join_all(
+    Ok(join_all(
         section_ids.iter().map(|section_id| async move {
             get_assignments_for_section(&section_id).await.unwrap()
         }),
@@ -72,28 +73,42 @@ async fn get_assignments(section_ids: &[i32]) -> Result<Vec<Assignment>, anyhow:
     .collect())
 }
 
-async fn download_assignments(assignments: &[Assignment]) -> Result<(), anyhow::Error> {
-    for assignment in assignments.iter() {
-        let student_name = &assignment.user.as_ref().unwrap().name;
-        let user_dir = format!(
-            "{}/{}",
-            std::env::current_dir()?.to_str().unwrap(),
-            student_name,
-        );
-        if let Some(ref attachments) = assignment.attachments {
-            std::fs::create_dir_all(&user_dir)?;
-            println!("Downloading submission from: {}", student_name);
-            for attachment in attachments.iter() {
-                if let Err(e) =
-                    download_file(&attachment.url, &attachment.filename, &user_dir).await
-                {
+async fn download_attachments(attachments: Vec<Attachment>, path: String, student_name: String) {
+    let inner_tasks: Vec<_> = attachments
+        .into_iter()
+        .map(|attachment| {
+            let path = path.clone();
+            let student_name = student_name.clone();
+            tokio::spawn(async move {
+                if let Err(_) = download_file(&attachment.url, &attachment.filename, &path).await {
                     println!("Error when downloading submission from {}", student_name);
-                    return Err(e);
                 }
-            }
-        }
-    }
-    Ok(())
+            })
+        })
+        .collect();
+    join_all(inner_tasks).await;
+}
+
+async fn download_assignments(assignments: Vec<Assignment>) {
+    let tasks: Vec<_> = assignments
+        .into_iter()
+        .map(|assignment| {
+            tokio::spawn(async move {
+                let student_name = &assignment.user.as_ref().unwrap().name;
+                let path = format!(
+                    "{}/{}",
+                    std::env::current_dir().unwrap().to_str().unwrap(),
+                    student_name,
+                );
+                if let Some(attachments) = assignment.attachments {
+                    std::fs::create_dir_all(&path).unwrap();
+                    println!("Downloading submission from: {}", student_name);
+                    download_attachments(attachments, path, student_name.to_owned()).await;
+                }
+            })
+        })
+        .collect();
+    join_all(tasks).await;
 }
 
 async fn get_section_ids() -> Result<Vec<i32>, anyhow::Error> {
@@ -127,7 +142,7 @@ async fn main() -> Result<(), anyhow::Error> {
     dotenv::dotenv().ok();
     let section_ids = get_section_ids().await?;
     let assignments = get_assignments(&section_ids).await?;
-    download_assignments(&assignments).await?;
+    download_assignments(assignments).await;
 
     Ok(())
 }
