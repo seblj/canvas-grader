@@ -22,8 +22,11 @@ async fn get(url: &str) -> Result<Response, anyhow::Error> {
         .await?)
 }
 
-async fn download_all_assignments(url: String) -> Result<Vec<Assignment>, anyhow::Error> {
-    let mut url = url;
+async fn get_assignments_for_section(section: &i32) -> Result<Vec<Assignment>, anyhow::Error> {
+    let assignment = dotenv::var("ASSIGNMENT").expect("Couldn't find id for assignment");
+    let mut url = format!(
+        "sections/{section}/assignments/{assignment}/submissions?per_page=100&include=user"
+    );
     let mut assignments = Vec::new();
     loop {
         let res = get(&url).await?;
@@ -56,23 +59,17 @@ async fn download_all_assignments(url: String) -> Result<Vec<Assignment>, anyhow
     Ok(assignments)
 }
 
+// Wow! Concurrently & Unreadalbe!
 async fn get_assignments(section_ids: &[i32]) -> Result<Vec<Assignment>, anyhow::Error> {
-    let assignment = dotenv::var("ASSIGNMENT").expect("Couldn't find id for assignment");
-
-    // Wow! Concurrently & Unreadalbe!
-    let assignments: Vec<Assignment> = 
-        futures::future::join_all(section_ids.iter()
-            .map(|section_id| {
-                let url = format!("sections/{section_id}/assignments/{assignment}/submissions?per_page=100&include=user");
-                async move {
-                    download_all_assignments(url).await.unwrap()
-                }}))
-            .await
-            .into_iter()
-            .flatten()
-            .collect();
-
-    Ok(assignments)
+    Ok(futures::future::join_all(
+        section_ids.iter().map(|section_id| async move {
+            get_assignments_for_section(&section_id).await.unwrap()
+        }),
+    )
+    .await
+    .into_iter()
+    .flatten()
+    .collect())
 }
 
 async fn download_assignments(assignments: &[Assignment]) -> Result<(), anyhow::Error> {
@@ -87,7 +84,9 @@ async fn download_assignments(assignments: &[Assignment]) -> Result<(), anyhow::
             std::fs::create_dir_all(&user_dir)?;
             println!("Downloading submission from: {}", student_name);
             for attachment in attachments.iter() {
-                if let Err(e) = download_file(&attachment.url, &attachment.filename, &user_dir).await {
+                if let Err(e) =
+                    download_file(&attachment.url, &attachment.filename, &user_dir).await
+                {
                     println!("Error when downloading submission from {}", student_name);
                     return Err(e);
                 }
@@ -114,10 +113,12 @@ async fn get_section_ids() -> Result<Vec<i32>, anyhow::Error> {
     Ok(course
         .sections
         .iter()
-        .filter_map(|section|
+        .filter_map(|section| {
             (section.enrollment_role == EnrollmentRole::TA
                 || section.enrollment_role == EnrollmentRole::Teacher
-                    && section.name != course.course_code).then_some(section.id))
+                    && section.name != course.course_code)
+                .then_some(section.id)
+        })
         .collect())
 }
 
