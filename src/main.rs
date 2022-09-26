@@ -110,7 +110,11 @@ async fn download_assignments(assignments: Vec<Assignment>) {
         .map(|assignment| {
             tokio::spawn(async move {
                 let student_name = assignment.user.unwrap().name;
-                let path = format!("{:?}/{}", std::env::current_dir().unwrap(), student_name);
+                let path = format!(
+                    "{}/{}",
+                    std::env::current_dir().unwrap().display(),
+                    student_name
+                );
                 if let Some(attachments) = assignment.attachments {
                     std::fs::create_dir_all(&path).unwrap();
                     println!("Downloading submission from: {}", student_name);
