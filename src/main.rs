@@ -75,7 +75,7 @@ async fn get_assignments_for_section(
 async fn get_assignments(section_ids: &[i32]) -> Result<Vec<Assignment>, anyhow::Error> {
     let assignment = Args::parse().assignment;
     Ok(join_all(section_ids.iter().map(|section_id| async move {
-        get_assignments_for_section(&section_id, &assignment)
+        get_assignments_for_section(section_id, &assignment)
             .await
             .unwrap()
     }))
@@ -92,7 +92,10 @@ async fn download_attachments(attachments: Vec<Attachment>, path: String, studen
             let path = path.clone();
             let student_name = student_name.clone();
             tokio::spawn(async move {
-                if let Err(_) = download_file(&attachment.url, &attachment.filename, &path).await {
+                if download_file(&attachment.url, &attachment.filename, &path)
+                    .await
+                    .is_err()
+                {
                     println!("Error when downloading submission from {}", student_name);
                 }
             })
@@ -106,12 +109,8 @@ async fn download_assignments(assignments: Vec<Assignment>) {
         .into_iter()
         .map(|assignment| {
             tokio::spawn(async move {
-                let student_name = &assignment.user.as_ref().unwrap().name;
-                let path = format!(
-                    "{}/{}",
-                    std::env::current_dir().unwrap().to_str().unwrap(),
-                    student_name,
-                );
+                let student_name = assignment.user.unwrap().name;
+                let path = format!("{:?}/{}", std::env::current_dir().unwrap(), student_name);
                 if let Some(attachments) = assignment.attachments {
                     std::fs::create_dir_all(&path).unwrap();
                     println!("Downloading submission from: {}", student_name);
@@ -128,10 +127,9 @@ async fn get_section_ids() -> Result<Vec<i32>, anyhow::Error> {
     let res = get(url).await?;
 
     let body = res.json::<Vec<Course>>().await?;
-    let course = Args::parse().course;
     let course = body
         .iter()
-        .find(|x| x.id == course)
+        .find(|x| x.id == Args::parse().course)
         .expect("Couldn't find course");
     Ok(course
         .sections
